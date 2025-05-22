@@ -1,0 +1,84 @@
+The directory `FSM3D-Q` is a self-contained Fortran 90 implementation of the “3-D fictitious-stress finite-subdomain method” (a constant–quadrilateral-element version of the displacement–discontinuity / boundary-element family).  
+It is organised in three sequential solver stages and an optional hydraulic-fracturing extension.
+
+────────────────────────────────────────────────────────
+1.  Core solver – Parts 1 → 3
+────────────────────────────────────────────────────────
+• `part1`  (FSM3D_qua_part1_main.f90)  
+  – Reads geometry, material data and boundary conditions from `input_part1.txt`.  
+  – Builds the 3 × 3 influence-coefficient matrix for every element pair, using:
+      • regular vs. singular Green-function kernels in `subs_fs3d_qua_num.f90`,  
+      • adaptive Gaussian quadrature (up to 24 × 24 points) chosen from the
+        element-to-field-point distance ratio,  
+      • local–global coordinate transformations (`convert` routine).  
+  – Solves the linear system with a Gauss-Seidel iterative solver (OpenMP-parallel).  
+  – Outputs the fictitious surface tractions at each element centroid to `P.txt`
+    and a full log in `output_part1.txt`.
+
+• `part2`  (FSM3D_qua_part2_main.f90)  
+  – Re-reads the model plus the fictitious tractions (`P.txt`).  
+  – Computes the resulting stresses (σzx, σzy, σzz) and displacements
+    (uₓ,uᵧ,u_z) at every element centroid in its own local CS.  
+  – Adds the user-specified initial in-situ stress field to obtain the final
+    physical stresses. Results are written to `output_part2.txt`.
+
+• `part3`  (FSM3D_qua_part3_main.f90)  
+  – Post-processor: for an arbitrary list of field points and a prescribed
+    orthonormal local coordinate system at each point
+    (supplied in `input_part3.txt`), it returns the full 3-D stress tensor
+    (σxx, σyy, σzz, σxy, σxz, σyz) and displacement vector.  
+  – Uses the same influence routines but with 6×3 stress kernels.  
+  – Outputs are saved in `output_part3.txt`.
+
+Key numerical engine (`subs_fs3d_qua_num.f90`)  
+•  2 800 + lines of Green-function subroutines:  
+   – `stress_regular/dis_regular` (field inside integral element)  
+   – `stress_singular/dis_singular` (self-influence)  
+   – adaptive Gauss–Legendre quadrature generator `Gauss_points_weights`.  
+•  `convert` builds element-local orthogonal bases.  
+Progress feedback is provided by the small `prog_bar` module.
+
+────────────────────────────────────────────────────────
+2.  Hydraulic-fracture extension – `hf_extension`
+────────────────────────────────────────────────────────
+This folder upgrades the mechanical kernel to simulate dynamic, planar
+hydraulic-fracture growth:
+
+• `HF_driver.f90`            single-cluster time-step driver  
+• `HF_driver_multi.f90`      multi-cluster driver  
+• `flow_network.f90`         1-D Poiseuille network solver (pressure ↔ flow)  
+• `mech_bridge.f90` and `ddm_mechanics.f90` couple fluid pressure to aperture
+  using the same DDM compliance matrix that Part 1 assembles.  
+• `ki_ddm.f90` calculates mode-I stress‐intensity factor (K_I) from the
+  fictitious stresses; `fracture_crit.f90` applies LEFM / tensile criteria
+  to break new elements; `hf_front.f90` and `extend_mesh` add tip elements.  
+• `hf_nf_interaction.f90`, `nf_embedding.f90`, `nf_types.f90` allow
+  interaction with pre-existing natural fractures.  
+• `json_io*` provide lightweight JSON input/output; `run_hf_driver.bat`
+  is a compile-and-run batch script for Windows.
+
+What the HF extension can do:
+  1. March in (pseudo-)time; each step solves mechanics ⇄ fluid pressure in a
+     Picard loop.  
+  2. Carter leak-off and several inlet-boundary options (pressure- or
+     rate-controlled).  
+  3. Computes K_I at the fracture tip with DDM, compares with K_Ic, breaks the
+     next face, appends it to the mesh, and continues.  
+  4. Dumps evolving aperture and pressure fields to text or JSON; includes a
+     small Python post-processor (`kgd_postprocess.py`).
+
+────────────────────────────────────────────────────────
+Practical workflow
+────────────────────────────────────────────────────────
+1. Prepare `input_part1.txt` (geometry, BCs, material)  
+2. Run Part 1 ⇒ produces fictitious tractions `P.txt`  
+3. Run Part 2 ⇒ stresses & displacements on fracture faces  
+4. (Optional) prepare `input_part3.txt` and run Part 3 for interior points  
+5. (Optional) compile & run `HF_driver` to simulate pressure-driven crack
+   propagation; monitor `pressure_out.txt` or JSON state dumps.
+
+In short, the `FSM3D-Q` code base lets you:
+• solve 3-D elasticity problems with constant quadrilateral boundary elements,  
+• evaluate stresses/displacements anywhere, and  
+• extend that solution to coupled hydraulic-fracture growth with basic fluid
+  flow, leak-off, fracture mechanics and interaction with natural fractures.
